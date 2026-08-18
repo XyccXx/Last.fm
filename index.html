@@ -161,6 +161,14 @@
   .disc-match{ font-size:10px; color:var(--moss); margin-top:4px; letter-spacing:0.05em; }
   .disc-because{ font-size:10px; color:var(--text-dim); margin-top:6px; }
 
+  .album-grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(90px,1fr)); gap:8px; }
+  .album-cell{ position:relative; aspect-ratio:1; border-radius:8px; overflow:hidden; background:var(--tape); border:1px solid var(--line); }
+  .album-cell img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .album-fallback{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-family:'Oswald',sans-serif; font-size:22px; color:var(--text-dim); }
+  .album-caption{ position:absolute; left:0; right:0; bottom:0; padding:5px 6px; font-size:8.5px; line-height:1.3;
+    background:linear-gradient(0deg, rgba(0,0,0,0.85), transparent); color:var(--label);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
   .loading, .err{ font-size:12px; color:var(--text-dim); padding:10px 0; }
   .err{ color:var(--rust); }
   .foot{ text-align:center; margin-top:24px; font-size:10.5px; color:var(--text-dim); letter-spacing:0.06em; }
@@ -213,6 +221,15 @@
     <div id="artists-container" class="loading">Memuat tracklist…</div>
   </div>
 
+  <!-- TOP TRACKS -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">Side A — Top Lagu</div>
+      <div class="panel-sub">Sepanjang waktu</div>
+    </div>
+    <div id="tracks-container" class="loading">Memuat lagu…</div>
+  </div>
+
   <!-- GENRE EQ -->
   <div class="panel">
     <div class="panel-head">
@@ -220,6 +237,15 @@
       <div class="panel-sub">Genre dari 5 artis teratas</div>
     </div>
     <div id="eq-container" class="loading">Menganalisis frekuensi…</div>
+  </div>
+
+  <!-- ALBUM COLLAGE -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">Sampul Album</div>
+      <div class="panel-sub">Top album kamu</div>
+    </div>
+    <div id="albums-container" class="loading">Menyusun sampul…</div>
   </div>
 
   <!-- DISCOVER -->
@@ -231,13 +257,17 @@
     <div id="disc-container" class="loading">Mencari lagu bonus…</div>
   </div>
 
-  <div class="foot">DATA VIA LAST.FM API · USER: AYSAI</div>
+  <div class="foot" id="foot-text">DATA VIA LAST.FM API · USER: AYSAI</div>
 </div>
 
 <script>
 const API_KEY = "c6192780103a59c8d32b0fa58f0897df";
-const USER = "Aysai";
 const BASE = "https://ws.audioscrobbler.com/2.0/";
+const PLACEHOLDER_HASH = "2a96cbd8b46e442fc41c2b86b821562f";
+
+const USER = "Aysai";
+let currentPeriod = "overall";
+let recentTimer = null;
 
 function api(method, extraParams){
   const params = new URLSearchParams({
@@ -254,6 +284,12 @@ function api(method, extraParams){
     });
 }
 
+function escapeHtml(s){
+  const d = document.createElement("div");
+  d.textContent = s || "";
+  return d.innerHTML;
+}
+
 function relTime(unixSec){
   const diff = Math.floor(Date.now()/1000) - unixSec;
   if(diff < 60) return "baru saja";
@@ -266,32 +302,48 @@ function imgOf(arr, size){
   size = size || "extralarge";
   if(!arr) return null;
   const found = arr.find(i => i.size === size) || arr[arr.length-1];
-  return found && found["#text"] ? found["#text"] : null;
+  const url = found && found["#text"] ? found["#text"] : null;
+  if(!url || url.includes(PLACEHOLDER_HASH)) return null;
+  return url;
+}
+
+function setLoading(id, msg){
+  const el = document.getElementById(id);
+  if(el) el.innerHTML = '<div class="loading">' + msg + '</div>';
+}
+function setError(id, msg){
+  const el = document.getElementById(id);
+  if(el) el.innerHTML = '<div class="err">' + msg + '</div>';
 }
 
 // ---------- USER INFO ----------
-api("user.getinfo").then(data => {
-  const u = data.user;
-  const regDate = new Date(parseInt(u.registered.unixtime) * 1000);
-  const regStr = regDate.toLocaleDateString("id-ID", {year:"numeric", month:"long"});
-  document.getElementById("member-since").textContent = "Anggota sejak " + regStr;
+function loadUserInfo(){
+  return api("user.getinfo").then(data => {
+    const u = data.user;
+    const regDate = new Date(parseInt(u.registered.unixtime) * 1000);
+    const regStr = regDate.toLocaleDateString("id-ID", {year:"numeric", month:"long"});
+    document.getElementById("member-since").textContent = "Anggota sejak " + regStr;
 
-  const scrobbles = parseInt(u.playcount);
-  document.getElementById("stat-scrobbles").textContent = scrobbles.toLocaleString("id-ID");
+    const scrobbles = parseInt(u.playcount);
+    document.getElementById("stat-scrobbles").textContent = scrobbles.toLocaleString("id-ID");
 
-  const daysSince = Math.max(1, Math.floor((Date.now() - regDate.getTime()) / 86400000));
-  document.getElementById("stat-perday").textContent = (scrobbles / daysSince).toFixed(1);
-}).catch(err => {
-  document.getElementById("member-since").textContent = "Gagal memuat profil";
-  console.error(err);
-});
+    const daysSince = Math.max(1, Math.floor((Date.now() - regDate.getTime()) / 86400000));
+    document.getElementById("stat-perday").textContent = (scrobbles / daysSince).toFixed(1);
+    return u;
+  }).catch(err => {
+    document.getElementById("member-since").textContent = "Gagal memuat profil — cek username";
+    console.error(err);
+    return null;
+  });
+}
 
 // ---------- NOW PLAYING + RECENT ----------
 function loadRecent(){
   api("user.getrecenttracks", {limit: 8, extended: 1}).then(data => {
     const tracks = data.recenttracks.track;
     if(!tracks || tracks.length === 0){
-      document.getElementById("np-container").innerHTML = '<div class="err">Belum ada riwayat scrobble.</div>';
+      setError("np-container", "Belum ada riwayat scrobble.");
+      document.getElementById("recent-list").innerHTML = "";
       return;
     }
     const list = Array.isArray(tracks) ? tracks : [tracks];
@@ -299,71 +351,67 @@ function loadRecent(){
     const isPlaying = first["@attr"] && first["@attr"].nowplaying === "true";
     const img = imgOf(first.image, "large");
 
-    document.getElementById("np-container").innerHTML = `
-      <div class="np-body">
-        ${img ? `<img class="np-art" src="${img}" alt="">` : `<div class="np-art"></div>`}
-        <div class="np-info">
-          <div class="np-track">${escapeHtml(first.name)}</div>
-          <div class="np-artist">${escapeHtml(first.artist.name)}</div>
-          <div class="np-led">
-            <div class="dot ${isPlaying ? 'live' : ''}"></div>
-            <div class="led-text">${isPlaying ? 'Sedang diputar' : (first.date ? relTime(parseInt(first.date.uts)) : 'terakhir diputar')}</div>
-          </div>
-        </div>
-      </div>`;
+    document.getElementById("np-container").innerHTML =
+      '<div class="np-body">' +
+        (img ? '<img class="np-art" src="' + img + '" alt="">' : '<div class="np-art"></div>') +
+        '<div class="np-info">' +
+          '<div class="np-track">' + escapeHtml(first.name) + '</div>' +
+          '<div class="np-artist">' + escapeHtml(first.artist.name) + '</div>' +
+          '<div class="np-led">' +
+            '<div class="dot ' + (isPlaying ? 'live' : '') + '"></div>' +
+            '<div class="led-text">' + (isPlaying ? 'Sedang diputar' : (first.date ? relTime(parseInt(first.date.uts)) : 'terakhir diputar')) + '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
 
     const rest = list.slice(1);
-    document.getElementById("recent-list").innerHTML = rest.map(t => `
-      <div class="recent-row">
-        <div class="rt-song">${escapeHtml(t.artist.name)} — ${escapeHtml(t.name)}</div>
-        <div class="rt-time">${t.date ? relTime(parseInt(t.date.uts)) : ''}</div>
-      </div>
-    `).join("");
+    document.getElementById("recent-list").innerHTML = rest.map(t =>
+      '<div class="recent-row">' +
+        '<div class="rt-song">' + escapeHtml(t.artist.name) + ' — ' + escapeHtml(t.name) + '</div>' +
+        '<div class="rt-time">' + (t.date ? relTime(parseInt(t.date.uts)) : '') + '</div>' +
+      '</div>'
+    ).join("");
   }).catch(err => {
-    document.getElementById("np-container").innerHTML = '<div class="err">Gagal memuat lagu terakhir.</div>';
+    setError("np-container", "Gagal memuat lagu terakhir.");
     console.error(err);
   });
 }
-loadRecent();
-setInterval(loadRecent, 45000);
 
-function escapeHtml(s){
-  const d = document.createElement("div");
-  d.textContent = s || "";
-  return d.innerHTML;
+function restartRecentPolling(){
+  if(recentTimer) clearInterval(recentTimer);
+  loadRecent();
+  recentTimer = setInterval(loadRecent, 45000);
 }
 
 // ---------- TOP ARTISTS ----------
-let overallArtistsCache = null;
-
 function renderArtists(list){
   const max = Math.max(...list.map(a => parseInt(a.playcount)));
-  document.getElementById("artists-container").innerHTML = list.slice(0,8).map((a,i) => `
-    <div class="track-row">
-      <div class="tr-num">${String(i+1).padStart(2,'0')}</div>
-      <div>
-        <div class="tr-name">${escapeHtml(a.name)}</div>
-        <div class="tr-bar-wrap"><div class="tr-bar" data-w="${(parseInt(a.playcount)/max*100).toFixed(0)}"></div></div>
-      </div>
-      <div class="tr-count">${parseInt(a.playcount).toLocaleString('id-ID')}×</div>
-    </div>
-  `).join("");
+  document.getElementById("artists-container").innerHTML = list.slice(0,8).map((a,i) =>
+    '<div class="track-row">' +
+      '<div class="tr-num">' + String(i+1).padStart(2,'0') + '</div>' +
+      '<div>' +
+        '<div class="tr-name">' + escapeHtml(a.name) + '</div>' +
+        '<div class="tr-bar-wrap"><div class="tr-bar" data-w="' + (parseInt(a.playcount)/max*100).toFixed(0) + '"></div></div>' +
+      '</div>' +
+      '<div class="tr-count">' + parseInt(a.playcount).toLocaleString('id-ID') + '×</div>' +
+    '</div>'
+  ).join("");
   requestAnimationFrame(() => {
-    document.querySelectorAll(".tr-bar").forEach(el => { el.style.width = el.dataset.w + "%"; });
+    document.querySelectorAll("#artists-container .tr-bar").forEach(el => { el.style.width = el.dataset.w + "%"; });
   });
 }
 
 function loadTopArtists(period){
-  document.getElementById("artists-container").innerHTML = '<div class="loading">Memuat tracklist…</div>';
-  api("user.gettopartists", {period, limit: 8}).then(data => {
+  setLoading("artists-container", "Memuat tracklist…");
+  return api("user.gettopartists", {period, limit: 8}).then(data => {
     const list = data.topartists.artist || [];
     if(list.length === 0){
-      document.getElementById("artists-container").innerHTML = '<div class="err">Belum ada data untuk periode ini.</div>';
+      setError("artists-container", "Belum ada data untuk periode ini.");
       return;
     }
     renderArtists(list);
   }).catch(err => {
-    document.getElementById("artists-container").innerHTML = '<div class="err">Gagal memuat top artis.</div>';
+    setError("artists-container", "Gagal memuat top artis.");
     console.error(err);
   });
 }
@@ -372,89 +420,160 @@ document.querySelectorAll("#period-tabs .tab").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll("#period-tabs .tab").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
-    loadTopArtists(btn.dataset.period);
+    currentPeriod = btn.dataset.period;
+    loadTopArtists(currentPeriod);
   });
 });
 
-loadTopArtists("overall");
-
-// ---------- GENRE EQ + DISCOVER (based on overall top 50) ----------
-api("user.gettopartists", {period: "overall", limit: 50}).then(data => {
-  const list = data.topartists.artist || [];
-  overallArtistsCache = list;
-  if(list.length === 0){
-    document.getElementById("eq-container").innerHTML = '<div class="err">Tidak ada data artis.</div>';
-    document.getElementById("disc-container").innerHTML = '<div class="err">Tidak ada data artis.</div>';
-    return;
-  }
-
-  document.getElementById("stat-topartist").textContent = list[0].name;
-
-  const top5 = list.slice(0,5);
-  const tagPromises = top5.map(a => api("artist.gettoptags", {artist: a.name, autocorrect: 1}).catch(() => null));
-
-  Promise.all(tagPromises).then(results => {
-    const tagCounts = {};
-    results.forEach(r => {
-      if(!r || !r.toptags || !r.toptags.tag) return;
-      const tags = (Array.isArray(r.toptags.tag) ? r.toptags.tag : [r.toptags.tag]).slice(0,3);
-      tags.forEach(t => {
-        const name = t.name.toLowerCase();
-        const count = parseInt(t.count) || 1;
-        tagCounts[name] = (tagCounts[name] || 0) + count;
-      });
-    });
-    const sorted = Object.entries(tagCounts).sort((a,b) => b[1]-a[1]).slice(0,7);
-    if(sorted.length === 0){
-      document.getElementById("eq-container").innerHTML = '<div class="err">Tidak cukup data genre.</div>';
-      return;
+// ---------- TOP TRACKS ----------
+function loadTopTracks(){
+  setLoading("tracks-container", "Memuat lagu…");
+  return api("user.gettoptracks", {period: "overall", limit: 8}).then(data => {
+    const list = data.toptracks.track || [];
+    if(list.length === 0){
+      setError("tracks-container", "Belum ada data lagu.");
+      return [];
     }
-    const maxCount = sorted[0][1];
-    document.getElementById("eq-container").innerHTML = `
-      <div class="eq">
-        ${sorted.map(([name,count],i) => `
-          <div class="eq-col">
-            <div class="eq-bar" style="animation-delay:${i*0.15}s" data-h="${Math.max(8,(count/maxCount*100)).toFixed(0)}"></div>
-            <div class="eq-label">${escapeHtml(name)}</div>
-          </div>
-        `).join("")}
-      </div>
-    `;
+    const max = Math.max(...list.map(t => parseInt(t.playcount)));
+    document.getElementById("tracks-container").innerHTML = list.map((t,i) =>
+      '<div class="track-row">' +
+        '<div class="tr-num">' + String(i+1).padStart(2,'0') + '</div>' +
+        '<div>' +
+          '<div class="tr-name">' + escapeHtml(t.name) + '<br><span style="color:var(--text-dim); font-size:11px;">' + escapeHtml(t.artist.name) + '</span></div>' +
+          '<div class="tr-bar-wrap"><div class="tr-bar" data-w="' + (parseInt(t.playcount)/max*100).toFixed(0) + '"></div></div>' +
+        '</div>' +
+        '<div class="tr-count">' + parseInt(t.playcount).toLocaleString('id-ID') + '×</div>' +
+      '</div>'
+    ).join("");
     requestAnimationFrame(() => {
-      document.querySelectorAll(".eq-bar").forEach(el => { el.style.height = el.dataset.h + "%"; });
+      document.querySelectorAll("#tracks-container .tr-bar").forEach(el => { el.style.width = el.dataset.w + "%"; });
     });
+    return list;
+  }).catch(err => {
+    setError("tracks-container", "Gagal memuat top lagu.");
+    console.error(err);
+    return [];
   });
+}
 
-  // discover: similar artists to #1, filtered against known list
-  const knownNames = new Set(list.map(a => a.name.toLowerCase()));
-  api("artist.getsimilar", {artist: list[0].name, limit: 12, autocorrect: 1}).then(simData => {
-    const sim = simData.similarartists && simData.similarartists.artist ? simData.similarartists.artist : [];
-    const filtered = sim.filter(a => !knownNames.has(a.name.toLowerCase())).slice(0,6);
-    if(filtered.length === 0){
-      document.getElementById("disc-container").innerHTML = '<div class="err">Belum ada rekomendasi baru — kamu sudah dengar semuanya!</div>';
+// ---------- ALBUM COLLAGE ----------
+function loadAlbums(){
+  setLoading("albums-container", "Menyusun sampul…");
+  return api("user.gettopalbums", {period: "overall", limit: 10}).then(data => {
+    const list = data.topalbums.album || [];
+    if(list.length === 0){
+      setError("albums-container", "Belum ada data album.");
       return;
     }
-    document.getElementById("disc-container").innerHTML = `
-      <div class="disc-grid">
-        ${filtered.map(a => `
-          <div class="disc-card">
-            <div class="disc-name">${escapeHtml(a.name)}</div>
-            <div class="disc-match">${(parseFloat(a.match)*100).toFixed(0)}% match</div>
-            <div class="disc-because">mirip ${escapeHtml(list[0].name)}</div>
-          </div>
-        `).join("")}
-      </div>
-    `;
+    document.getElementById("albums-container").innerHTML =
+      '<div class="album-grid">' +
+        list.map(al => {
+          const img = imgOf(al.image, "extralarge");
+          return '<div class="album-cell">' +
+              (img ? '<img src="' + img + '" alt="" loading="lazy">' : '<div class="album-fallback">' + escapeHtml(al.name.charAt(0).toUpperCase()) + '</div>') +
+              '<div class="album-caption">' + escapeHtml(al.name) + '</div>' +
+            '</div>';
+        }).join("") +
+      '</div>';
   }).catch(err => {
-    document.getElementById("disc-container").innerHTML = '<div class="err">Gagal memuat rekomendasi.</div>';
+    setError("albums-container", "Gagal memuat sampul album.");
     console.error(err);
   });
+}
 
-}).catch(err => {
-  document.getElementById("eq-container").innerHTML = '<div class="err">Gagal memuat data genre.</div>';
-  document.getElementById("disc-container").innerHTML = '<div class="err">Gagal memuat rekomendasi.</div>';
-  console.error(err);
-});
+// ---------- GENRE EQ + DISCOVER ----------
+function loadGenreDiscoverAndDj(){
+  setLoading("eq-container", "Menganalisis frekuensi…");
+  setLoading("disc-container", "Mencari lagu bonus…");
+
+  return api("user.gettopartists", {period: "overall", limit: 50}).then(data => {
+    const list = data.topartists.artist || [];
+    if(list.length === 0){
+      setError("eq-container", "Tidak ada data artis.");
+      setError("disc-container", "Tidak ada data artis.");
+      return;
+    }
+
+    document.getElementById("stat-topartist").textContent = list[0].name;
+
+    const top5 = list.slice(0,5);
+    const tagPromises = top5.map(a => api("artist.gettoptags", {artist: a.name, autocorrect: 1}).catch(() => null));
+
+    const tagWork = Promise.all(tagPromises).then(results => {
+      const tagCounts = {};
+      results.forEach(r => {
+        if(!r || !r.toptags || !r.toptags.tag) return;
+        const tags = (Array.isArray(r.toptags.tag) ? r.toptags.tag : [r.toptags.tag]).slice(0,3);
+        tags.forEach(t => {
+          const name = t.name.toLowerCase();
+          const count = parseInt(t.count) || 1;
+          tagCounts[name] = (tagCounts[name] || 0) + count;
+        });
+      });
+      const sorted = Object.entries(tagCounts).sort((a,b) => b[1]-a[1]).slice(0,7);
+      if(sorted.length === 0){
+        setError("eq-container", "Tidak cukup data genre.");
+        return [];
+      }
+      const maxCount = sorted[0][1];
+      document.getElementById("eq-container").innerHTML =
+        '<div class="eq">' +
+          sorted.map(([name,count],i) =>
+            '<div class="eq-col">' +
+              '<div class="eq-bar" style="animation-delay:' + (i*0.15) + 's" data-h="' + Math.max(8,(count/maxCount*100)).toFixed(0) + '"></div>' +
+              '<div class="eq-label">' + escapeHtml(name) + '</div>' +
+            '</div>'
+          ).join("") +
+        '</div>';
+      requestAnimationFrame(() => {
+        document.querySelectorAll("#eq-container .eq-bar").forEach(el => { el.style.height = el.dataset.h + "%"; });
+      });
+      return sorted;
+    });
+
+    const knownNames = new Set(list.map(a => a.name.toLowerCase()));
+    const simWork = api("artist.getsimilar", {artist: list[0].name, limit: 12, autocorrect: 1}).then(simData => {
+      const sim = simData.similarartists && simData.similarartists.artist ? simData.similarartists.artist : [];
+      const filtered = sim.filter(a => !knownNames.has(a.name.toLowerCase())).slice(0,6);
+      if(filtered.length === 0){
+        setError("disc-container", "Belum ada rekomendasi baru — kamu sudah dengar semuanya!");
+        return [];
+      }
+      document.getElementById("disc-container").innerHTML =
+        '<div class="disc-grid">' +
+          filtered.map(a =>
+            '<div class="disc-card">' +
+              '<div class="disc-name">' + escapeHtml(a.name) + '</div>' +
+              '<div class="disc-match">' + (parseFloat(a.match)*100).toFixed(0) + '% match</div>' +
+              '<div class="disc-because">mirip ' + escapeHtml(list[0].name) + '</div>' +
+            '</div>'
+          ).join("") +
+        '</div>';
+      return filtered;
+    }).catch(err => {
+      setError("disc-container", "Gagal memuat rekomendasi.");
+      console.error(err);
+      return [];
+    });
+
+  }).catch(err => {
+    setError("eq-container", "Gagal memuat data genre.");
+    setError("disc-container", "Gagal memuat rekomendasi.");
+    console.error(err);
+  });
+}
+
+// ---------- INIT ----------
+function loadAll(){
+  loadUserInfo();
+  restartRecentPolling();
+  loadTopArtists(currentPeriod);
+  loadTopTracks();
+  loadAlbums();
+  loadGenreDiscoverAndDj();
+}
+
+loadAll();
 </script>
 </body>
 </html>
